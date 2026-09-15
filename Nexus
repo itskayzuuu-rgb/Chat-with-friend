@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>NEXUS Chat</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:#090d18;color:#f5f7ff;display:flex;justify-content:center}
+    .app{width:min(760px,100%);min-height:100vh;display:flex;flex-direction:column;background:#0d1324}
+    header{padding:16px 18px;border-bottom:1px solid #222b43;background:#10182c;position:sticky;top:0;z-index:2}
+    header h1{font-size:20px;margin:0}
+    header small{color:#9ca8c7}
+    .join{padding:18px;display:grid;gap:10px;border-bottom:1px solid #222b43}
+    .row{display:flex;gap:10px}
+    input,button{font:inherit;border-radius:12px;border:1px solid #2a3554}
+    input{width:100%;padding:13px 14px;background:#0a1020;color:#fff;outline:none}
+    input:focus{border-color:#6e7cff}
+    button{padding:12px 16px;background:#6474ff;color:white;font-weight:700;cursor:pointer}
+    button.secondary{background:#1b2542}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    #status{font-size:13px;color:#9ca8c7}
+    #messages{flex:1;padding:16px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+    .msg{max-width:82%;padding:10px 12px;border-radius:14px;background:#18213a;align-self:flex-start;word-break:break-word}
+    .msg.mine{align-self:flex-end;background:#3043a7}
+    .meta{font-size:11px;opacity:.7;margin-bottom:4px}
+    .composer{display:flex;gap:8px;padding:12px;position:sticky;bottom:0;background:#10182c;border-top:1px solid #222b43;padding-bottom:max(12px,env(safe-area-inset-bottom))}
+    #empty{color:#7f8bad;text-align:center;margin:auto}
+    .note{font-size:12px;color:#8590ae}
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>NEXUS Chat</h1>
+      <small>Chat privé V1.1</small>
+    </header>
+
+    <section class="join">
+      <input id="name" maxlength="24" placeholder="Ton pseudo" autocomplete="nickname">
+      <input id="room" maxlength="32" placeholder="Code salon (ex: NEXUS8472)" autocapitalize="characters">
+      <div class="row">
+        <button id="createBtn">Créer le salon</button>
+        <button id="joinBtn" class="secondary">Rejoindre</button>
+      </div>
+      <div id="status">Connexion à Firebase…</div>
+      <div class="note">Ton pseudo est sauvegardé sur cet appareil. Pour discuter ensemble, utilisez le même code de salon.</div>
+    </section>
+
+    <section id="messages">
+      <div id="empty">Crée ou rejoins un salon pour commencer.</div>
+    </section>
+
+    <form id="form" class="composer">
+      <input id="text" maxlength="1000" placeholder="Écris un message…" disabled autocomplete="off">
+      <button id="send" type="submit" disabled>Envoyer</button>
+    </form>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+    import {
+      getFirestore, collection, addDoc, query, orderBy, limit,
+      onSnapshot, serverTimestamp, doc, getDoc, setDoc
+    } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyANDeMbRUzD0yH60wm1TGAcKsjK749uKo4",
+      authDomain: "chat-nexus-e64a0.firebaseapp.com",
+      projectId: "chat-nexus-e64a0",
+      storageBucket: "chat-nexus-e64a0.firebasestorage.app",
+      messagingSenderId: "126754128537",
+      appId: "1:126754128537:web:051153b1cd135d8f74ee08",
+      measurementId: "G-M1GDHMT8ZM"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const nameEl = document.querySelector("#name");
+    const roomEl = document.querySelector("#room");
+    const createBtn = document.querySelector("#createBtn");
+    const joinBtn = document.querySelector("#joinBtn");
+    const statusEl = document.querySelector("#status");
+    const messagesEl = document.querySelector("#messages");
+    const form = document.querySelector("#form");
+    const textEl = document.querySelector("#text");
+    const sendBtn = document.querySelector("#send");
+
+    let uid = null;
+    let currentRoom = null;
+    let currentName = null;
+    let unsubscribe = null;
+
+    const savedName = localStorage.getItem("nexusName");
+    if (savedName) nameEl.value = savedName;
+
+    try {
+      await signInAnonymously(auth);
+    } catch (e) {
+      statusEl.textContent = "Erreur connexion anonyme : " + e.message;
+    }
+
+    onAuthStateChanged(auth, user => {
+      uid = user?.uid ?? null;
+      statusEl.textContent = uid ? "Connecté. Crée ou rejoins un salon." : "Non connecté.";
+    });
+
+    function cleanRoom(value) {
+      return value.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0,32);
+    }
+
+    function getInputs() {
+      const name = nameEl.value.trim().slice(0,24);
+      const room = cleanRoom(roomEl.value);
+      if (!uid) { alert("Firebase n'est pas encore connecté."); return null; }
+      if (!name) { alert("Mets un pseudo."); return null; }
+      if (room.length < 4) { alert("Choisis un code salon d'au moins 4 caractères."); return null; }
+      localStorage.setItem("nexusName", name);
+      return {name, room};
+    }
+
+    function renderMessage(data) {
+      const div = document.createElement("div");
+      div.className = "msg" + (data.uid === uid ? " mine" : "");
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = data.name || "Anonyme";
+
+      const body = document.createElement("div");
+      body.textContent = data.text || "";
+
+      div.append(meta, body);
+      messagesEl.appendChild(div);
+    }
+
+    function enterRoom(name, room) {
+      currentName = name;
+      currentRoom = room;
+      roomEl.value = room;
+
+      if (unsubscribe) unsubscribe();
+
+      messagesEl.innerHTML = "";
+      statusEl.textContent = `Salon : ${room}`;
+      textEl.disabled = false;
+      sendBtn.disabled = false;
+      textEl.focus();
+
+      const messagesRef = collection(db, "rooms", room, "messages");
+      const q = query(messagesRef, orderBy("createdAt", "asc"), limit(200));
+
+      unsubscribe = onSnapshot(q, snap => {
+        messagesEl.innerHTML = "";
+        if (snap.empty) {
+          const empty = document.createElement("div");
+          empty.id = "empty";
+          empty.textContent = "Aucun message. Dis bonjour 👋";
+          messagesEl.appendChild(empty);
+        } else {
+          snap.forEach(d => renderMessage(d.data()));
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }, err => {
+        statusEl.textContent = "Erreur Firestore : " + err.message;
+      });
+    }
+
+    createBtn.addEventListener("click", async () => {
+      const values = getInputs();
+      if (!values) return;
+      const {name, room} = values;
+
+      const roomRef = doc(db, "rooms", room);
+      const snap = await getDoc(roomRef);
+
+      if (snap.exists()) {
+        alert("Ce code existe déjà. Choisis un autre code ou clique sur Rejoindre.");
+        return;
+      }
+
+      await setDoc(roomRef, {
+        createdAt: serverTimestamp(),
+        ownerUid: uid
+      });
+
+      enterRoom(name, room);
+    });
+
+    joinBtn.addEventListener("click", async () => {
+      const values = getInputs();
+      if (!values) return;
+      const {name, room} = values;
+
+      const roomRef = doc(db, "rooms", room);
+      const snap = await getDoc(roomRef);
+
+      if (!snap.exists()) {
+        alert("Ce salon n'existe pas encore. Clique sur Créer le salon.");
+        return;
+      }
+
+      enterRoom(name, room);
+    });
+
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      const text = textEl.value.trim();
+      if (!text || !uid || !currentRoom) return;
+
+      textEl.value = "";
+      const messagesRef = collection(db, "rooms", currentRoom, "messages");
+
+      try {
+        await addDoc(messagesRef, {
+          text: text.slice(0,1000),
+          name: currentName,
+          uid,
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        alert("Envoi impossible : " + e.message);
+      }
+    });
+  </script>
+</body>
+</html>
